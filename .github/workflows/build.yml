@@ -10,8 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [c2s, c2slte, c1s, c1slte, z3s, y2s, y2slte, x1s, x1slte, r8s]
-
+        target: [r8s]
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
