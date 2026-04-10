@@ -345,21 +345,65 @@ log_info "✅ Kernel configuration complete"
 log_section "Compiling Kernel"
 
 CORES=$(nproc --all)
+RAM_GB=$(free -g | awk '/^Mem:/ {print $2}')
 log_info "Using $CORES CPU cores for compilation"
+log_info "Available RAM: ${RAM_GB}GB"
 log_info "Starting kernel compilation..."
 
-if [ "$VERBOSE" = true ]; then
-    # Show detailed output
-    if ! make ${MAKE_ARGS} -j"$CORES" 2>&1 | tee build_compile.log; then
-        abort "Kernel compilation failed - check build_compile.log"
+echo -e "\n${CYAN}════════════════════════════════════════${NC}"
+echo -e "${CYAN}  REAL-TIME COMPILATION PROCESS${NC}"
+echo -e "${CYAN}════════════════════════════════════════${NC}\n"
+
+BUILD_START=$(date +%s)
+
+# Compile and show each step: CC, AR, AS, LD, etc.
+if ! make ${MAKE_ARGS} -j"$CORES" 2>&1 | tee build_compile.log | grep -E "CC |AR |AS |ld |LINK |MODPOST|LZ4C|GEN |HOSTCC|HOSTLD|UPD |STRIP |OBJCOPY|ZSTD|GZIP|CAT |pad |COPY " || true; then
+    # Filter and show the full output with build steps
+    echo ""
+    log_info "Processing build output..."
+    
+    if [ -f build_compile.log ]; then
+        # Show CC (compile) steps
+        echo -e "\n${GREEN}[CC - Source Compilation]${NC}"
+        grep -c "CC " build_compile.log 2>/dev/null | xargs -I {} echo -e "  ${YELLOW}→${NC} Compiled {} files" || true
+        grep "CC " build_compile.log 2>/dev/null | head -10 | tail -5 || true
+        
+        # Show AR (archive) steps
+        echo -e "\n${GREEN}[AR - Archive Creation]${NC}"
+        grep -c "AR " build_compile.log 2>/dev/null | xargs -I {} echo -e "  ${YELLOW}→${NC} Created {} archives" || true
+        grep "AR " build_compile.log 2>/dev/null | head -5 || true
+        
+        # Show AS (assembler) steps
+        echo -e "\n${GREEN}[AS - Assembly]${NC}"
+        grep -c "AS " build_compile.log 2>/dev/null | xargs -I {} echo -e "  ${YELLOW}→${NC} Assembled {} files" || true
+        grep "AS " build_compile.log 2>/dev/null | head -5 || true
+        
+        # Show LD (linking) steps
+        echo -e "\n${GREEN}[LD - Linking]${NC}"
+        grep -c "ld " build_compile.log 2>/dev/null | xargs -I {} echo -e "  ${YELLOW}→${NC} Linked {} objects" || true
+        grep "ld " build_compile.log 2>/dev/null | head -5 || true
+        
+        # Show LINK (kernel link)
+        echo -e "\n${GREEN}[LINK - Kernel Linking]${NC}"
+        grep "LINK " build_compile.log 2>/dev/null | head -3 || true
+        
+        # Show MODPOST (module post-processing)
+        echo -e "\n${GREEN}[MODPOST - Module Processing]${NC}"
+        grep "MODPOST" build_compile.log 2>/dev/null | head -3 || true
     fi
-else
-    # Show progress only
-    if ! make ${MAKE_ARGS} -j"$CORES" 2>&1 | tee build_compile.log | tail -20; then
+    
+    # Only abort if make command actually failed
+    if tail -5 build_compile.log | grep -q "Error\|error\|ERROR"; then
+        echo ""
         tail -50 build_compile.log
         abort "Kernel compilation failed - check build_compile.log"
     fi
 fi
+
+BUILD_END=$(date +%s)
+BUILD_TIME=$((BUILD_END - BUILD_START))
+BUILD_MINUTES=$((BUILD_TIME / 60))
+BUILD_SECONDS=$((BUILD_TIME % 60))
 
 # Verify kernel image
 if [ ! -f "$BUILD_DIR/arch/$ARCH/boot/Image" ]; then
@@ -367,8 +411,9 @@ if [ ! -f "$BUILD_DIR/arch/$ARCH/boot/Image" ]; then
 fi
 
 KERNEL_SIZE=$(du -h "$BUILD_DIR/arch/$ARCH/boot/Image" | cut -f1)
-log_info "✅ Kernel compiled successfully"
+log_info "✅ Kernel compiled successfully (${BUILD_MINUTES}m ${BUILD_SECONDS}s)"
 log_info "Kernel size: $KERNEL_SIZE"
+log_info "Kernel image: $BUILD_DIR/arch/$ARCH/boot/Image"
 
 # ==================== PACKAGE GENERATION ====================
 log_section "Creating Flashable Package"
@@ -437,11 +482,14 @@ cat > "$SUMMARY_FILE" << EOF
 Build Information:
 ─────────────────
 Build Date:        $(date)
+Build Duration:    ${BUILD_MINUTES}m ${BUILD_SECONDS}s
 Model:             $MODEL
 Architecture:      $ARCH
 Kernel Name:       $KERNEL_NAME
 Compiler:          Clang $CLANG_VERSION
 Build Tool:        Unified Build Script
+CPU Cores:         $CORES
+Available RAM:     ${RAM_GB}GB
 
 Kernel Details:
 ─────────────────
@@ -482,7 +530,7 @@ Next Steps:
 
 Logs:
 ──────
-Compilation Log: build_compile.log
+Compilation Log: build_compile.log (full output)
 This Summary:    $SUMMARY_FILE
 
 ════════════════════════════════════════════════════════════
