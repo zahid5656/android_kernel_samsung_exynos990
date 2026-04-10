@@ -39,7 +39,7 @@ while [[ $# -gt 0 ]]; do
             DTB_OPTION="$2"
             shift 2
             ;;
-        *)\
+        *)
             unset_flags
             exit 1
             ;;
@@ -51,65 +51,55 @@ echo "Preparing the build environment..."
 pushd $(dirname "$0") > /dev/null
 CORES=`cat /proc/cpuinfo | grep -c processor`
 
-# Define toolchain variables
-CLANG_DIR=$PWD/toolchain/clang_14
-PATH=$CLANG_DIR/bin:$PATH
+# ==================== Neutron Clang 18 ====================
+CLANG_DIR=$PWD/toolchain/clang_18
+export PATH="$CLANG_DIR/bin:$PATH"
 
 # Check if toolchain exists
-if [ ! -f "$CLANG_DIR/bin/clang-14" ]; then
+if [ ! -f "$CLANG_DIR/bin/clang" ]; then
     echo "-----------------------------------------------"
-    echo "Toolchain not found! Downloading..."
+    echo "Neutron Clang 18 not found!"
+    echo "GitHub Actions should have downloaded it in toolchain/clang_18"
     echo "-----------------------------------------------"
-    rm -rf $CLANG_DIR
-    mkdir -p $CLANG_DIR
-    pushd $CLANG_DIR > /dev/null
-    curl -LJOk https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-13.0.0_r13/clang-r450784d.tar.gz
-    tar xf android-13.0.0_r13-clang-r450784d.tar.gz
-    rm android-13.0.0_r13-clang-r450784d.tar.gz
-    echo "Cleaning up..."
-    popd > /dev/null
+    exit 1
 fi
+
+echo "Clang Version: $(clang --version | head -n 1)"
 
 MAKE_ARGS="
 LLVM=1 \
 LLVM_IAS=1 \
+CC=clang \
+LD=ld.lld \
+AR=llvm-ar \
+NM=llvm-nm \
+OBJCOPY=llvm-objcopy \
+OBJDUMP=llvm-objdump \
+STRIP=llvm-strip \
+HOSTCC=clang \
+HOSTCXX=clang++ \
 ARCH=arm64 \
-O=out
-"
+O=out"
 
-# Define specific variables
+export KCFLAGS="-Wno-error=implicit-function-declaration \
+-Wno-error=strict-prototypes \
+-Wno-error=incompatible-pointer-types \
+-Wno-error=implicit-int \
+-Wno-error=return-type"
+
+# ==================== তোমার পুরানো লজিক ====================
 KERNEL_DEFCONFIG=extreme_"$MODEL"_defconfig
 case $MODEL in
-x1slte)
-    BOARD=SRPSJ28B018KU
-;;
-x1s)
-    BOARD=SRPSI19A018KU
-;;
-y2slte)
-    BOARD=SRPSJ28A018KU
-;;
-y2s)
-    BOARD=SRPSG12A018KU
-;;
-z3s)
-    BOARD=SRPSI19B018KU
-;;
-c1slte)
-    BOARD=SRPTC30B009KU
-;;
-c1s)
-    BOARD=SRPTB27D009KU
-;;
-c2slte)
-    BOARD=SRPTC30A009KU
-;;
-c2s)
-    BOARD=SRPTB27C009KU
-;;
-r8s)
-    BOARD=SRPTF26B014KU
-;;
+x1slte) BOARD=SRPSJ28B018KU ;;
+x1s)    BOARD=SRPSI19A018KU ;;
+y2slte) BOARD=SRPSJ28A018KU ;;
+y2s)    BOARD=SRPSG12A018KU ;;
+z3s)    BOARD=SRPSI19B018KU ;;
+c1slte) BOARD=SRPTC30B009KU ;;
+c1s)    BOARD=SRPTB27D009KU ;;
+c2slte) BOARD=SRPTC30A009KU ;;
+c2s)    BOARD=SRPTB27C009KU ;;
+r8s)    BOARD=SRPTF26B014KU ;;
 *)
     unset_flags
     exit
@@ -136,7 +126,6 @@ rm -rf build/out/$MODEL
 mkdir -p build/out/$MODEL/zip/files
 mkdir -p build/out/$MODEL/zip/META-INF/com/google/android
 
-# Build kernel image
 echo "-----------------------------------------------"
 echo "Defconfig: "$KERNEL_DEFCONFIG""
 if [ -z "$KSU" ]; then
@@ -188,43 +177,24 @@ PAGESIZE=2048
 RAMDISK=build/out/$MODEL/ramdisk.cpio.gz
 OUTPUT_FILE=build/out/$MODEL/boot.img
 
-## Build auxiliary boot.img files
-# Copy kernel to build
 if [ -z "$DTBS" ]; then
     cp out/arch/arm64/boot/Image build/out/$MODEL
 fi
 
-# Build dtb
-echo "Building common exynos9830 Device Tree Blob Image..."
-echo "-----------------------------------------------"
 ./toolchain/mkdtimg cfg_create build/out/$MODEL/dtb.img build/dtconfigs/exynos9830.cfg -d out/arch/arm64/boot/dts/exynos
-
-# Build dtbo
-echo "Building Device Tree Blob Output Image for "$MODEL"..."
-echo "-----------------------------------------------"
 ./toolchain/mkdtimg cfg_create build/out/$MODEL/dtbo.img build/dtconfigs/$MODEL.cfg -d out/arch/arm64/boot/dts/samsung
 
 if [ -z "$RECOVERY" ] && [ -z "$DTBS" ]; then
-    # Build ramdisk
-    echo "Building RAMDisk..."
-    echo "-----------------------------------------------"
     pushd build/ramdisk > /dev/null
      find . ! -name . | LC_ALL=C sort | cpio -o -H newc -R root:root | gzip > ../out/$MODEL/ramdisk.cpio.gz || abort
     popd > /dev/null
-    echo "-----------------------------------------------"
 
-    # Create boot image
-    echo "Creating boot image..."
-    echo "-----------------------------------------------"
      ./toolchain/mkbootimg --base $BASE --board $BOARD --cmdline "$CMDLINE" --dtb $DTB_PATH \
     --dtb_offset $DTB_OFFSET --hashtype $HASHTYPE --header_version $HEADER_VERSION --kernel $KERNEL_PATH \
     --kernel_offset $KERNEL_OFFSET --os_patch_level $OS_PATCH_LEVEL --os_version $OS_VERSION --pagesize $PAGESIZE \
     --ramdisk $RAMDISK --ramdisk_offset $RAMDISK_OFFSET \
     --second_offset $SECOND_OFFSET --tags_offset $TAGS_OFFSET -o $OUTPUT_FILE || abort
 
-    # Build zip
-    echo "Building zip..."
-    echo "-----------------------------------------------"
     cp build/out/$MODEL/boot.img build/out/$MODEL/zip/files/boot.img
     cp build/out/$MODEL/dtbo.img build/out/$MODEL/zip/files/dtbo.img
     cp build/update-binary build/out/$MODEL/zip/META-INF/com/google/android/update-binary
